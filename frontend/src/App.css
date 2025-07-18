@@ -1,1 +1,26 @@
 @import "tailwindcss";
+
+.ce-block__content .cdx-input {
+  display: none !important;
+}
+#editorjs {
+
+  width: 100%;
+  height: 100%;
+}
+
+.codex-editor {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.codex-editor__redactor {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 50px;
+}
+
+.ce-block {
+  max-width: 100% !important;
+}

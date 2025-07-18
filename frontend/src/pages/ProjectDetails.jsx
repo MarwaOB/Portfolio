@@ -13,14 +13,35 @@ function ProjectDetails() {
     const [selectedImages, setSelectedImages] = useState([]);
     const [newImages, setNewImages] = useState([]);
     const [deletedImages, setDeletedImages] = useState([]); // Track deleted images
+    const [clients, setClients] = useState([]);
+    const [selectedClient, setSelectedClient] = useState("");
+    const [showNewClientForm, setShowNewClientForm] = useState(false);
+    const [newClient, setNewClient] = useState({ name: "", tel: "", e_mail: "", image: "" });
+    const [allTools, setAllTools] = useState([]);
+    const [selectedTools, setSelectedTools] = useState([]);
+    const [showNewToolForm, setShowNewToolForm] = useState(false);
+    const [newTool, setNewTool] = useState({ name: "", type: "", image: "" });
+    const [projectImages, setProjectImages] = useState([]);
 
     useEffect(() => {
         const fetchProject = async () => {
             try {
                 setLoading(true);
-                const response = await axios.get(`http://localhost:5000/api/project/${id}`);
-                setProject(response.data);
-                setEditedProject(response.data);
+                const [projectRes, imagesRes, clientRes, toolsRes, allClientsRes, allToolsRes] = await Promise.all([
+                    axios.get(`http://localhost:3000/api/projects/${id}`),
+                    axios.get(`http://localhost:3000/api/projects/${id}/images`),
+                    axios.get(`http://localhost:3000/api/projects/${id}/clients`),
+                    axios.get(`http://localhost:3000/api/projects/${id}/tools`),
+                    axios.get("http://localhost:3000/api/projects/allClients"),
+                    axios.get("http://localhost:3000/api/projects/allTools")
+                ]);
+                setProject(projectRes.data);
+                setEditedProject(projectRes.data);
+                setProjectImages(imagesRes.data.map(img => img.image));
+                setSelectedClient(clientRes.data[0]?.client_id || "");
+                setSelectedTools(toolsRes.data.map(t => t.tool_id));
+                setClients(allClientsRes.data);
+                setAllTools(allToolsRes.data);
             } catch (err) {
                 setError("Failed to load project details");
             } finally {
@@ -29,6 +50,29 @@ function ProjectDetails() {
         };
         fetchProject();
     }, [id]);
+
+    // Fetch all clients and tools, and the project's current client and tools, when entering edit mode
+    useEffect(() => {
+        if (isEditing) {
+            const fetchClientsAndTools = async () => {
+                try {
+                    const [clientsRes, toolsRes, projectClientsRes, projectToolsRes] = await Promise.all([
+                        axios.get("http://localhost:3000/api/projects/allClients"),
+                        axios.get("http://localhost:3000/api/projects/allTools"),
+                        axios.get(`http://localhost:3000/api/projects/${id}/clients`),
+                        axios.get(`http://localhost:3000/api/projects/${id}/tools`)
+                    ]);
+                    setClients(clientsRes.data);
+                    setAllTools(toolsRes.data);
+                    setSelectedClient(projectClientsRes.data[0]?.client_id || "");
+                    setSelectedTools(projectToolsRes.data.map(t => t.tool_id));
+                } catch (err) {
+                    // handle error
+                }
+            };
+            fetchClientsAndTools();
+        }
+    }, [isEditing, id]);
 
     const handleEditToggle = () => {
         if (isEditing) {
@@ -67,10 +111,7 @@ function ProjectDetails() {
         setDeletedImages(prev => [...prev, imageUrl]);
         
         // Remove from current project images
-        setEditedProject(prev => ({
-            ...prev,
-            images: prev.images.filter((_, i) => i !== index)
-        }));
+        setProjectImages(prev => prev.filter((_, i) => i !== index));
     };
 
     const handleDeleteNewImage = (index) => {
@@ -84,55 +125,206 @@ function ProjectDetails() {
         setSelectedImages(prev => prev.filter((_, i) => i !== index));
     };
 
-    const handleUpdate = async () => {
+ const handleUpdate = async () => {
+  setLoading(true);
+  try {
+    console.log('Starting update process...');
+    console.log('Edited project data:', editedProject);
+    
+    // Helper function to format date properly
+    const formatDate = (dateString) => {
+      if (!dateString) return null;
+      // If it's already in YYYY-MM-DD format, return as is
+      if (dateString.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        return dateString;
+      }
+      // If it's an ISO string or date object, extract just the date part
+      const date = new Date(dateString);
+      return date.toISOString().split('T')[0]; // Returns YYYY-MM-DD
+    };
+    
+    // Prepare the update payload with properly formatted dates
+    const updatePayload = {
+      project_id: id,
+      title: editedProject.title,
+      description: editedProject.description,
+      live_link: editedProject.live_link,
+      git_link: editedProject.git_link,
+      start_date: formatDate(editedProject.start_date),
+      end_date: formatDate(editedProject.end_date)
+    };
+    
+    console.log('Update payload:', updatePayload);
+
+    // 1. Update main project fields
+    const updateResponse = await axios.post("http://localhost:3000/api/projects/modify", updatePayload);
+    console.log('Main project update response:', updateResponse.data);
+
+    // 2. Update client link if changed
+    try {
+      // Get current project clients
+      const currentClientsRes = await axios.get(`http://localhost:3000/api/projects/${id}/clients`);
+      const currentClientId = currentClientsRes.data[0]?.client_id;
+      
+      // Only update if client has changed
+      if (currentClientId !== selectedClient) {
+        // Remove current client if exists
+        if (currentClientId) {
+          await axios.post("http://localhost:3000/api/projects/remove_project_client", { 
+            project_id: id, 
+            client_id: currentClientId 
+          });
+        }
+        
+        // Add new client if selected
+        if (selectedClient) {
+          await axios.post("http://localhost:3000/api/projects/add_project_client", { 
+            project_id: id, 
+            client_id: selectedClient 
+          });
+        }
+      }
+    } catch (clientError) {
+      console.error('Error updating client:', clientError);
+      // Continue with other updates even if client update fails
+    }
+
+    // 3. Update tools
+    try {
+      const oldToolsRes = await axios.get(`http://localhost:3000/api/projects/${id}/tools`);
+      const oldToolIds = oldToolsRes.data.map(t => t.tool_id);
+      
+      // Remove tools that are no longer selected
+      const toolsToRemove = oldToolIds.filter(toolId => !selectedTools.includes(toolId));
+      for (const tool_id of toolsToRemove) {
+        await axios.post("http://localhost:3000/api/projects/remove_project_tool", { 
+          project_id: id, 
+          tool_id 
+        });
+      }
+      
+      // Add newly selected tools
+      const toolsToAdd = selectedTools.filter(toolId => !oldToolIds.includes(toolId));
+      for (const tool_id of toolsToAdd) {
+        await axios.post("http://localhost:3000/api/projects/add_project_tool", { 
+          project_id: id, 
+          tool_id 
+        });
+      }
+    } catch (toolError) {
+      console.error('Error updating tools:', toolError);
+      // Continue with other updates even if tool update fails
+    }
+
+    // 4. Handle image updates
+    try {
+      // Remove deleted images
+      for (const imageUrl of deletedImages) {
+        await axios.post("http://localhost:3000/api/projects/remove_image", { 
+          project_id: id, 
+          image: imageUrl 
+        });
+      }
+
+      // Add new images
+      for (const image of selectedImages) {
+        const formData = new FormData();
+        formData.append('project_id', id);
+        formData.append('image', image);
+        await axios.post("http://localhost:3000/api/projects/upload_image", formData, {
+          headers: { "Content-Type": "multipart/form-data" }
+        });
+      }
+    } catch (imageError) {
+      console.error('Error updating images:', imageError);
+      // Continue even if image update fails
+    }
+
+    // 5. Update demo if needed
+    if (editedProject.live_link && editedProject.live_link !== project.live_link) {
+      try {
+        await axios.post("http://localhost:3000/api/projects/demo", { 
+          project_id: id, 
+          demo: editedProject.live_link 
+        });
+      } catch (demoError) {
+        console.error('Error updating demo:', demoError);
+        // Continue even if demo update fails
+      }
+    }
+
+    // 6. Refresh project data
+    const updatedResponse = await axios.get(`http://localhost:3000/api/projects/${id}`);
+    const updatedImagesResponse = await axios.get(`http://localhost:3000/api/projects/${id}/images`);
+    
+    setProject(updatedResponse.data);
+    setEditedProject(updatedResponse.data);
+    setProjectImages(updatedImagesResponse.data.map(img => img.image));
+    setIsEditing(false);
+    setSelectedImages([]);
+    setNewImages([]);
+    setDeletedImages([]);
+    
+    // Clean up blob URLs
+    newImages.forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+      }
+    });
+
+    alert("Project updated successfully!");
+    
+  } catch (err) {
+    console.error("Failed to update project:", err);
+    console.error("Error details:", err.response?.data || err.message);
+    
+    // Show more specific error message
+    const errorMessage = err.response?.data?.details || err.response?.data?.error || err.message;
+    alert(`Failed to update project: ${errorMessage}`);
+    
+    setError("Failed to update project");
+  } finally {
+    setLoading(false);
+  }
+};
+    // Add new client
+    const handleAddNewClient = async () => {
+        if (!newClient.name) {
+            alert("Please fill in client name");
+            return;
+        }
         try {
-            const formData = new FormData();
-            
-            // Append all project fields
-            Object.keys(editedProject).forEach(key => {
-                if (key !== 'images' && key !== 'id') {
-                    formData.append(key, editedProject[key]);
-                }
-            });
-
-            // Add selected image files
-            selectedImages.forEach((image) => {
-                formData.append("project_images", image);
-            });
-
-            // Add deleted images list
-            if (deletedImages.length > 0) {
-                formData.append("deleted_images", JSON.stringify(deletedImages));
-            }
-
-            const response = await axios.put(`http://localhost:5000/api/update_project/${id}`, formData, {
-                headers: {
-                    "Content-Type": "multipart/form-data",
-                },
-            });
-
-            // Update the project state with new data
-            setProject(editedProject);
-            setIsEditing(false);
-            setSelectedImages([]);
-            setNewImages([]);
-            setDeletedImages([]);
-            
-            // Clean up preview URLs
-            newImages.forEach(url => {
-                if (url.startsWith('blob:')) {
-                    URL.revokeObjectURL(url);
-                }
-            });
-            
-            // Refresh project data to get updated image URLs
-            const updatedResponse = await axios.get(`http://localhost:5000/api/project/${id}`);
-            setProject(updatedResponse.data);
-            setEditedProject(updatedResponse.data);
-            
-        } catch (err) {
-            console.error("Failed to update project:", err);
-            setError("Failed to update project");
+            await axios.post("http://localhost:3000/api/projects/clients", newClient);
+            const clientsRes = await axios.get("http://localhost:3000/api/projects/allClients");
+            setClients(clientsRes.data);
+            // Select the newly added client
+            const added = clientsRes.data.find(c => c.name === newClient.name && c.e_mail === newClient.e_mail);
+            setSelectedClient(added ? added.client_id : "");
+            setNewClient({ name: "", tel: "", e_mail: "", image: "" });
+            setShowNewClientForm(false);
+            alert("Client added successfully!");
+        } catch (error) {
+            alert("Failed to add client");
+        }
+    };
+    // Add new tool
+    const handleAddNewTool = async () => {
+        if (!newTool.name || !newTool.type) {
+            alert("Please fill in tool name and type");
+            return;
+        }
+        try {
+            await axios.post("http://localhost:3000/api/projects/tools/add", newTool);
+            const toolsRes = await axios.get("http://localhost:3000/api/projects/allTools");
+            setAllTools(toolsRes.data);
+            // Select the newly added tool
+            const added = toolsRes.data.find(t => t.name === newTool.name && t.type === newTool.type);
+            if (added) setSelectedTools(prev => [...prev, added.tool_id]);
+            setNewTool({ name: "", type: "", image: "" });
+            setShowNewToolForm(false);
+            alert("Tool added successfully!");
+        } catch (error) {
+            alert("Failed to add tool");
         }
     };
 
@@ -203,10 +395,10 @@ function ProjectDetails() {
             <div className="flex-1 overflow-y-auto min-h-0">
                 <div className="rounded-lg shadow-md p-6 space-y-6 bg-[#CED9E5]">
                     {/* Project Title and Status */}
-                    {isEditing ? (
-                        <div className="flex items-start gap-20">
-                            <div className="w-80">
-                                <label className="block text-sm font-bold mb-2 text-gray-700">Project Title</label>
+                    <div className="flex items-start gap-20">
+                        <div className="w-80">
+                            <label className="block text-sm font-bold mb-2 text-gray-700">Project Title</label>
+                            {isEditing ? (
                                 <input
                                     type="text"
                                     name="title"
@@ -215,139 +407,42 @@ function ProjectDetails() {
                                     className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
                                     required
                                 />
-                            </div>
-                            <div className="flex flex-col">
-                                <label className="text-sm font-medium mb-2 text-gray-700">Status</label>
-                                <div className="flex gap-4">
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input
-                                            type="radio"
-                                            name="completed"
-                                            value="true"
-                                            checked={editedProject.completed === true || editedProject.completed === 1}
-                                            onChange={() => setEditedProject(prev => ({...prev, completed: true}))}
-                                        />
-                                        Completed
-                                    </label>
-                                    <label className="flex items-center gap-2 text-sm">
-                                        <input
-                                            type="radio"
-                                            name="completed"
-                                            value="false"
-                                            checked={editedProject.completed === false || editedProject.completed === 0}
-                                            onChange={() => setEditedProject(prev => ({...prev, completed: false}))}
-                                        />
-                                        In Progress
-                                    </label>
-                                </div>
-                            </div>
+                            ) : (
+                                <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">{project.title}</div>
+                            )}
                         </div>
-                    ) : (
-                        <div className="flex justify-between items-start">
-                            <div className="flex flex-col gap-y-2">
-                                <div className="flex items-center gap-x-4">
-                                    <h2 className="text-3xl font-bold text-[#2D2A26]">
-                                        {project.title}
-                                    </h2>
-                                    {project.completed !== undefined && (
-                                        <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
-                                            project.completed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
-                                        }`}>
-                                            {project.completed ? 'Completed' : 'In Progress'}
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="flex gap-8 mt-2 text-gray-700 text-sm">
-                                    {project.startDate && (
-                                        <span><strong>Start Date:</strong> {new Date(project.startDate).toLocaleDateString()}</span>
-                                    )}
-                                    {project.Period && (
-                                        <span><strong>Estimated Period:</strong> {project.Period} days</span>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    )}
+                    </div>
 
-                    {/* Start Date & Period (Edit Mode) */}
-                    {isEditing && (
-                        <div className="flex gap-8 mb-4">
-                            <div className="w-80">
-                                <label className="block text-sm font-medium mb-2 text-gray-700">Start Date</label>
+                    {/* Start Date & End Date */}
+                    <div className="flex gap-8 mb-4">
+                        <div className="w-80">
+                            <label className="block text-sm font-medium mb-2 text-gray-700">Start Date</label>
+                            {isEditing ? (
                                 <input
                                     type="date"
-                                    name="startDate"
-                                    value={editedProject.startDate ? editedProject.startDate.split('T')[0] : ''}
+                                    name="start_date"
+                                    value={editedProject.start_date ? editedProject.start_date.split('T')[0] : ''}
                                     onChange={handleInputChange}
                                     className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
                                     required
                                 />
-                            </div>
-                            <div className="w-80">
-                                <label className="block text-sm font-medium mb-2 text-gray-700">Estimated Period (days)</label>
-                                <input
-                                    type="number"
-                                    name="Period"
-                                    value={editedProject.Period}
-                                    onChange={handleInputChange}
-                                    className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
-                                    min="1"
-                                    required
-                                />
-                            </div>
+                            ) : (
+                                <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">{project.start_date ? new Date(project.start_date).toLocaleDateString() : ''}</div>
+                            )}
                         </div>
-                    )}
-
-                    {/* Project Images */}
-                    <div className="mb-8">
-                        <h3 className="text-lg text-sm text-gray-700 font-medium mb-2">Project Images</h3>
-                        <div className="flex items-start gap-4 flex-wrap">
-                            {/* Existing images */}
-                            {editedProject.images && editedProject.images.map((url, index) => (
-                                <div key={index} className="relative w-32 h-32 overflow-hidden rounded-md shadow-md group">
-                                    <img src={url} alt={`Project image ${index + 1}`} className="object-cover w-full h-full" />
-                                    {isEditing && (
-                                        <button
-                                            type="button"
-                                            onClick={() => handleDeleteImage(url, index)}
-                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                                            title="Delete image"
-                                        >
-                                            ×
-                                        </button>
-                                    )}
-                                </div>
-                            ))}
-                            
-                            {/* New images preview */}
-                            {newImages.map((src, index) => (
-                                <div key={`new-${index}`} className="relative w-32 h-32 overflow-hidden rounded-md shadow-md group">
-                                    <img src={src} alt={`new-upload-${index}`} className="object-cover w-full h-full" />
-                                    {isEditing && (
-                                        <button
-                                            type="button"
-                                            onClick={() => handleDeleteNewImage(index)}
-                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
-                                            title="Remove new image"
-                                        >
-                                            ×
-                                        </button>
-                                    )}
-                                </div>
-                            ))}
-                            
-                            {/* Add new images button (only in edit mode) */}
-                            {isEditing && (
-                                <label className="w-32 h-32 border-2 border-dashed border-gray-400 flex items-center justify-center text-gray-500 cursor-pointer hover:border-gray-600 transition-colors">
-                                    <input
-                                        type="file"
-                                        accept="image/*"
-                                        multiple
-                                        onChange={handleImageChange}
-                                        className="hidden"
-                                    />
-                                    <span className="text-sm text-center">Upload an image</span>
-                                </label>
+                        <div className="w-80">
+                            <label className="block text-sm font-medium mb-2 text-gray-700">End Date</label>
+                            {isEditing ? (
+                                <input
+                                    type="date"
+                                    name="end_date"
+                                    value={editedProject.end_date ? editedProject.end_date.split('T')[0] : ''}
+                                    onChange={handleInputChange}
+                                    className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
+                                    required
+                                />
+                            ) : (
+                                <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">{project.end_date ? new Date(project.end_date).toLocaleDateString() : ''}</div>
                             )}
                         </div>
                     </div>
@@ -365,110 +460,219 @@ function ProjectDetails() {
                                 required
                             />
                         ) : (
-                            <div className="w-full border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">
-                                <p className="text-gray-700 leading-relaxed">
+                            <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">
+                                <p className="text-gray-700 leading-relaxed whitespace-pre-line">
                                     {project.description || "No description available"}
                                 </p>
                             </div>
                         )}
                     </div>
 
-                    {/* Tools Used */}
-                    <div>
-                        <label className="block text-sm font-medium mb-2 text-gray-700">
-                            Tools Used 
-                        </label>
+                    {/* Client Selection */}
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium mb-2 text-gray-700">Client</label>
                         {isEditing ? (
-                            <div className="space-y-3">
-                                <input
-                                    type="text"
-                                    name="toolsFront"
-                                    value={editedProject.toolsFront}
-                                    onChange={handleInputChange}
-                                    placeholder="Front end: React, Angular, Vue"
-                                    className="w-[97%] border-b border-gray-400 bg-[#CED9E5] px-2 py-1 text-sm text-gray-600"
-                                    required
-                                />
-                                <input
-                                    type="text"
-                                    name="toolsBack"
-                                    value={editedProject.toolsBack}
-                                    onChange={handleInputChange}
-                                    placeholder="Back end: Node.js, Django"
-                                    className="w-[97%] border-b border-gray-400 bg-[#CED9E5] px-2 py-1 text-sm text-gray-600"
-                                    required
-                                />
-                                <input
-                                    type="text"
-                                    name="toolsBd"
-                                    value={editedProject.toolsBd}
-                                    onChange={handleInputChange}
-                                    placeholder="Database: MySQL, MongoDB"
-                                    className="w-[97%] border-b border-gray-400 bg-[#CED9E5] px-2 py-1 text-sm text-gray-600"
-                                    required
-                                />
-                            </div>
+                            <>
+                                <div className="mb-4">
+                                    <h4 className="text-sm font-normal mb-2">Select from existing clients:</h4>
+                                    <select
+                                        value={selectedClient}
+                                        onChange={e => setSelectedClient(e.target.value)}
+                                        className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
+                                        required
+                                    >
+                                        <option value="">Select a client</option>
+                                        {clients.length > 0 ? (
+                                            clients.map(client => (
+                                                <option key={client.client_id} value={client.client_id}>
+                                                    {client.name} {client.e_mail ? `(${client.e_mail})` : ''}
+                                                </option>
+                                            ))
+                                        ) : (
+                                            <option value="" disabled>No clients available</option>
+                                        )}
+                                    </select>
+                                </div>
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowNewClientForm(!showNewClientForm)}
+                                        className="bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600"
+                                    >
+                                        {showNewClientForm ? 'Cancel' : 'Add New Client'}
+                                    </button>
+                                    {showNewClientForm && (
+                                        <div className="mt-4 p-4 border border-gray-300 rounded bg-gray-50">
+                                            <h4 className="font-medium mb-3">Add New Client</h4>
+                                            <div className="space-y-3">
+                                                <input type="text" name="name" value={newClient.name} onChange={e => setNewClient({ ...newClient, name: e.target.value })} placeholder="Client Name" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" required />
+                                                <input type="tel" name="tel" value={newClient.tel} onChange={e => setNewClient({ ...newClient, tel: e.target.value })} placeholder="Phone Number (optional)" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" />
+                                                <input type="email" name="e_mail" value={newClient.e_mail} onChange={e => setNewClient({ ...newClient, e_mail: e.target.value })} placeholder="Email (optional)" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" />
+                                                <input type="text" name="image" value={newClient.image} onChange={e => setNewClient({ ...newClient, image: e.target.value })} placeholder="Client Image URL (optional)" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" />
+                                                <button type="button" onClick={handleAddNewClient} className="bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">Add Client</button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </>
                         ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="bg-[#CED9E5] rounded p-2 border border-gray-400">
-                                    <h4 className="font-medium text-gray-600 mb-1">Frontend</h4>
-                                    <p className="text-sm">{project.toolsFront || "Not specified"}</p>
+                            <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">
+                                {clients.find(c => c.client_id === selectedClient)?.name || 'No client assigned'}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Tools Selection */}
+                    <div className="mb-4">
+                        <label className="block text-sm font-medium mb-2 text-gray-700">Tools Used</label>
+                        {isEditing ? (
+                            <>
+                                <div className="mb-4">
+                                    <h4 className="text-sm font-normal mb-2">Select from existing tools:</h4>
+                                    <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5] max-h-48 overflow-y-auto">
+                                        {allTools.length > 0 ? (
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {allTools.map(tool => (
+                                                    <div key={tool.tool_id} className="flex items-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            id={`tool-${tool.tool_id}`}
+                                                            checked={selectedTools.includes(tool.tool_id)}
+                                                            onChange={() => setSelectedTools(prev => prev.includes(tool.tool_id) ? prev.filter(id => id !== tool.tool_id) : [...prev, tool.tool_id])}
+                                                            className="mr-2"
+                                                        />
+                                                        <label htmlFor={`tool-${tool.tool_id}`} className="text-sm">
+                                                            {tool.name} ({tool.type})
+                                                        </label>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="text-gray-500">No tools available. Add some tools first.</div>
+                                        )}
+                                    </div>
                                 </div>
-                                <div className="bg-[#CED9E5] rounded p-2 border border-gray-400">
-                                    <h4 className="font-medium text-gray-600 mb-1">Backend</h4>
-                                    <p className="text-sm">{project.toolsBack || "Not specified"}</p>
+                                <div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowNewToolForm(!showNewToolForm)}
+                                        className="bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600"
+                                    >
+                                        {showNewToolForm ? 'Cancel' : 'Add New Tool'}
+                                    </button>
+                                    {showNewToolForm && (
+                                        <div className="mt-4 p-4 border border-gray-300 rounded bg-gray-50">
+                                            <h4 className="font-medium mb-3">Add New Tool</h4>
+                                            <div className="space-y-3">
+                                                <input type="text" name="name" value={newTool.name} onChange={e => setNewTool({ ...newTool, name: e.target.value })} placeholder="Tool Name" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" required />
+                                                <input type="text" name="type" value={newTool.type} onChange={e => setNewTool({ ...newTool, type: e.target.value })} placeholder="Tool Type (e.g., Frontend, Backend, Database)" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" required />
+                                                <input type="text" name="image" value={newTool.image} onChange={e => setNewTool({ ...newTool, image: e.target.value })} placeholder="Tool Image URL (optional)" className="w-full border border-gray-400 rounded px-3 py-2 bg-white" />
+                                                <button type="button" onClick={handleAddNewTool} className="bg-green-500 text-white px-4 py-2 rounded text-sm hover:bg-green-600">Add Tool</button>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="bg-[#CED9E5] rounded p-2 border border-gray-400">
-                                    <h4 className="font-medium text-gray-600 mb-1">Database</h4>
-                                    <p className="text-sm">{project.toolsBd || "Not specified"}</p>
-                                </div>
+                            </>
+                        ) : (
+                            <div className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]">
+                                {allTools.filter(t => selectedTools.includes(t.tool_id)).map(t => `${t.name} (${t.type})`).join(', ') || 'No tools assigned'}
                             </div>
                         )}
                     </div>
 
                     {/* Links */}
-                    <div className="flex gap-4 flex-wrap">
+                    <div className="flex gap-4 flex-wrap mb-2">
                         {isEditing ? (
-                            <div>
-                                <label className="block text-sm font-medium mb-2 text-gray-700">Demo Link</label>
+                            <>
+                                <label className="block text-sm font-medium mb-2 text-gray-700">Live Demo Link</label>
                                 <input
                                     type="text"
-                                    name="demo_link"
-                                    value={editedProject.demo_link}
+                                    name="live_link"
+                                    value={editedProject.live_link}
                                     onChange={handleInputChange}
                                     className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5] mb-4"
                                 />
                                 <label className="block text-sm font-medium mb-2 text-gray-700">GitHub Repo</label>
                                 <input
                                     type="text"
-                                    name="github_link"
-                                    value={editedProject.github_link}
+                                    name="git_link"
+                                    value={editedProject.git_link}
                                     onChange={handleInputChange}
                                     className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5]"
                                 />
-                            </div>
+                            </>
                         ) : (
                             <>
-                                {project.demo_link && (
-                                    <button
-                                        onClick={() => window.open(getAbsoluteUrl(project.demo_link), '_blank', 'noopener,noreferrer')}
-                                        className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors"
-                                        type="button"
-                                    >
-                                        View Live Demo
-                                    </button>
+                                {project.live_link && (
+                                    <a href={project.live_link.startsWith('http') ? project.live_link : `https://${project.live_link}`} target="_blank" rel="noopener noreferrer" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors">Live Demo</a>
                                 )}
-                                {project.github_link && (
-                                    <button
-                                        onClick={() => window.open(getAbsoluteUrl(project.github_link), '_blank', 'noopener,noreferrer')}
-                                        className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 transition-colors"
-                                        type="button"
-                                    >
-                                        View on GitHub
-                                    </button>
+                                {project.git_link && (
+                                    <a href={project.git_link.startsWith('http') ? project.git_link : `https://${project.git_link}`} target="_blank" rel="noopener noreferrer" className="bg-gray-800 text-white px-4 py-2 rounded hover:bg-gray-900 transition-colors">GitHub Repo</a>
                                 )}
                             </>
                         )}
+                    </div>
+
+                    {/* Project Images */}
+                    <div className="mb-8">
+                        <h3 className="text-lg text-sm text-gray-700 font-medium mb-2">Project Images</h3>
+                        <div className="flex items-start gap-4 flex-wrap">
+                            {/* Existing project images */}
+                            {projectImages && projectImages.length > 0
+                                ? projectImages.map((url, index) => (
+                                    <div key={`existing-${index}`} className="relative w-32 h-32 overflow-hidden rounded-md shadow-md group">
+                                        <img src={url} alt={`Project image ${index + 1}`} className="object-cover w-full h-full" />
+                                        {isEditing && (
+                                            <button
+                                                type="button"
+                                                onClick={() => handleDeleteImage(url, index)}
+                                                className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                title="Delete image"
+                                            >
+                                                ×
+                                            </button>
+                                        )}
+                                    </div>
+                                ))
+                                : null
+                            }
+                            
+                            {/* New images preview (only in edit mode) */}
+                            {isEditing && newImages && newImages.length > 0
+                                ? newImages.map((url, index) => (
+                                    <div key={`new-${index}`} className="relative w-32 h-32 overflow-hidden rounded-md shadow-md group">
+                                        <img src={url} alt={`New image ${index + 1}`} className="object-cover w-full h-full" />
+                                        <button
+                                            type="button"
+                                            onClick={() => handleDeleteNewImage(index)}
+                                            className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                                            title="Remove new image"
+                                        >
+                                            ×
+                                        </button>
+                                    </div>
+                                ))
+                                : null
+                            }
+                            
+                            {/* Show "No images" message only if no existing or new images */}
+                            {(!projectImages || projectImages.length === 0) && (!isEditing || !newImages || newImages.length === 0) && (
+                                <span className="text-gray-500">No images available</span>
+                            )}
+                            
+                            {isEditing && (
+                                <label className="w-32 h-32 border-2 border-dashed border-gray-400 flex items-center justify-center text-gray-500 cursor-pointer hover:border-gray-600 transition-colors">
+                                    <input
+                                        type="file"
+                                        accept="image/*"
+                                        multiple
+                                        onChange={handleImageChange}
+                                        className="hidden"
+                                    />
+                                    <span className="text-sm text-center">Upload an image</span>
+                                </label>
+                            )}
+                        </div>
                     </div>
 
                     {/* Edit/Update Button */}
@@ -488,8 +692,9 @@ function ProjectDetails() {
                                     ? "bg-green-600 text-white hover:bg-green-700" 
                                     : "bg-blue-600 text-white hover:bg-blue-700"
                             }`}
+                            disabled={loading}
                         >
-                            {isEditing ? "Update" : "Edit"}
+                            {isEditing ? (loading ? "Updating..." : "Update") : "Edit"}
                         </button>
                     </div>
                 </div>

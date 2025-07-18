@@ -6,59 +6,71 @@ function AddServicePage() {
   const [values, setValues] = useState({
     title: "",
     description: "",
-    tools: "",
-    demo_link: "",
-    github_repo: "",
-    status: "",
+    status: false,
+    pricing: "",
   });
   const [activeButton, setActiveButton] = useState("new"); // "new" or "see"
   const [selectedImages, setSelectedImages] = useState([]);
+  const [images, setImages] = useState([]);
+  const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
 
   const handleChange = (e) => {
-    setValues({ ...values, [e.target.name]: e.target.value });
+    const { name, value, type, checked } = e.target;
+    setValues({ 
+      ...values, 
+      [name]: type === "checkbox" ? checked : value 
+    });
   };
 
-   const [images, setImages] = useState([]);
+  const handleImageChange = (e) => {
+    const files = Array.from(e.target.files);
+    setSelectedImages(prev => [...prev, ...files]);
+    
+    // Create previews
+    const imagePreviews = files.map(file => URL.createObjectURL(file));
+    setImages(prev => [...prev, ...imagePreviews]);
+  };
 
-    const handleImageChange = (e) => {
-        const files = Array.from(e.target.files);
-        const imagePreviews = files.map(file => URL.createObjectURL(file));
-        setImages(prev => [...prev, ...imagePreviews]);
-    };
+  const removeImage = (index) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+    setImages(prev => prev.filter((_, i) => i !== index));
+  };
 
-
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setLoading(true);
+    try {
+      // First, add the service
+      const serviceData = {
+        title: values.title,
+        description: values.description,
+        status: values.status,
+        created_at: new Date().toISOString().split('T')[0], // Current date in YYYY-MM-DD format
+        pricing: values.pricing ? parseInt(values.pricing) : null
+      };
 
-    // Create FormData to handle file uploads
-    const formData = new FormData();
-    
-    // Add all form fields to FormData
-    Object.keys(values).forEach(key => {
-      formData.append(key, values[key]);
-    });
-    
-    // Combine tools into one string if backend expects that
-    formData.append('tools_used', `${values.tools_front}, ${values.tools_back}, ${values.tools_db}`);
-    
-    // Add images to FormData
-    selectedImages.forEach((image, index) => {
-      formData.append(`project_images`, image);
-    });
+      const serviceResponse = await axios.post("http://localhost:3000/api/services", serviceData);
+      const serviceId = serviceResponse.data.service_id;
+      
+      // Upload images to /api/services/upload_image
+      for (const image of selectedImages) {
+        const formData = new FormData();
+        formData.append('service_id', serviceId);
+        formData.append('image', image);
+        await axios.post("http://localhost:3000/api/services/upload_image", formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+      }
 
-    axios
-      .post("http://localhost:5000/api/add_project", formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      })
-      .then((res) => {
-        console.log("Project added:", res.data);
-        navigate("/admin/projects");
-      })
-      .catch((err) => console.error(err));
+      console.log("Service added:", serviceResponse.data);
+      navigate("/admin/services/see");
+    } catch (err) {
+      console.error("Error adding service:", err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -96,9 +108,9 @@ function AddServicePage() {
 
       {/* Scrollable Form */}
       <div className="flex-1 overflow-y-auto min-h-0">
-        <form onSubmit={handleSubmit} >
+        <form onSubmit={handleSubmit}>
           {/* Title and Status */}
-          <div className="flex  items-start gap-100">
+          <div className="flex items-start gap-8 mb-6">
             <div className="w-80">
               <label className="block text-sm font-medium font-bold mb-2 text-gray-700">Service Title</label>
               <input
@@ -111,11 +123,24 @@ function AddServicePage() {
               />
             </div>
 
+            <div className="w-40">
+              <label className="block text-sm font-medium font-bold mb-2 text-gray-700">Status</label>
+              <label className="flex items-center">
+                <input
+                  type="checkbox"
+                  name="status"
+                  checked={values.status}
+                  onChange={handleChange}
+                  className="mr-2"
+                />
+                <span className="text-sm text-gray-600">Active</span>
+              </label>
+            </div>
           </div>
 
           {/* Description */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 mt-10">Service Description</label>
+          <div className="mb-6">
+            <label className="block text-sm font-medium font-bold mb-2 text-gray-700">Service Description</label>
             <textarea
               rows={4}
               name="description"
@@ -126,40 +151,56 @@ function AddServicePage() {
             />
           </div>
 
-          {/* Tools */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 mt-10">Tools Used</label>
-            <div className="space-y-3">
-              <input
-                type="text"
-                value={values.tools}
-                onChange={handleChange}
-                placeholder="html5, Angular, Figma, Canva, ..."
-                className="w-[97%] border-b border-gray-400 bg-[#CED9E5] outline-none px-2 py-1 text-sm text-gray-600 focus:border-blue-500"
-              />
-            
-            </div>
+          {/* Pricing */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium font-bold mb-2 text-gray-700">Pricing</label>
+            <input
+              type="number"
+              name="pricing"
+              value={values.pricing}
+              onChange={handleChange}
+              placeholder="Enter price (optional)"
+              className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5] focus:outline-none focus:border-blue-500"
+            />
           </div>
 
-          {/* Links */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-gray-700 mt-10">Demo Link</label>
-            <input
-              type="text"
-              name="demo_link"
-              value={values.demo_link}
-              onChange={handleChange}
-              className="w-[97%] border border-gray-400 rounded px-3 py-2 bg-[#CED9E5] focus:outline-none focus:border-blue-500 mb-4"
-            />
+          {/* Images */}
+          <div className="mb-6">
+            <label className="block text-sm font-medium font-bold mb-2 text-gray-700">Service Images</label>
+            <div className="flex items-start gap-4 flex-wrap">
+              <label className="w-32 h-32 border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-500 cursor-pointer hover:border-gray-400">
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleImageChange}
+                  className="hidden"
+                />
+                <span className="text-sm text-center">Upload Images</span>
+              </label>
+              {images.map((src, index) => (
+                <div key={index} className="relative w-32 h-32 overflow-hidden rounded-md shadow-md">
+                  <img src={src} alt={`upload-${index}`} className="object-cover w-full h-full" />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(index)}
+                    className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Add Button */}
           <div className="flex justify-end pt-4">
             <button
               type="submit"
-              className="bg-green-600 text-white px-8 py-1 rounded font-medium hover:bg-green-700 transition-colors mr-4"
+              className="bg-green-600 text-white px-8 py-2 rounded font-medium hover:bg-green-700 transition-colors mr-4"
+              disabled={loading}
             >
-              Add
+              {loading ? "Adding..." : "Add Service"}
             </button>
           </div>
         </form>
