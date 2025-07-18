@@ -16,6 +16,7 @@ import OrderDetails from "./pages/OrderDetails";
 import AddServicePage from "./pages/AddServicePage";
 import SeeServicesPage from "./pages/SeeServicesPage";  
 import ServiceDetails from "./pages/ServiceDetails";
+import ServicesPage from './pages/servicePage';
 
 //import ServicesPage from "./pages/ServicesPage";
 //        <Route path="services" element={<ServicesPage />} />
@@ -23,6 +24,7 @@ import ServiceDetails from "./pages/ServiceDetails";
 function App() {
 
  return (
+/*
     <BrowserRouter>
       <Routes>
       <Route path="/admin" element={<AdminPanel />}>   
@@ -44,7 +46,8 @@ function App() {
 
       </Route>
     </Routes>
-    </BrowserRouter>  
+    </BrowserRouter>  */
+    <ServicesPage/>
   );
 }
 

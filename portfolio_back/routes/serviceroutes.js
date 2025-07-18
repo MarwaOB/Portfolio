@@ -78,6 +78,17 @@ router.post('/remove_image', async (req, res) => {
   }
 });
 
+// get all services
+router.get('/', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM service WHERE status = 1');
+    res.json(rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Failed to fetch services' });
+  }
+});
+
 module.exports = router;
 
 
